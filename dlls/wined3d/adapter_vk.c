@@ -2393,6 +2393,20 @@ static bool feature_level_9_3_supported(const struct wined3d_physical_device_inf
 
 static bool feature_level_10_supported(const struct wined3d_physical_device_info *info, unsigned int shader_model)
 {
+    /* EXPERIMENT (macOS/MoltenVK): Metal lacks geometry shaders, pipeline
+     * statistics and cull distances. D2D does not use them, so optionally
+     * ignore them to see whether FL 10_0 is otherwise usable. */
+    const char *relaxed = getenv("WINE4OFFICE_VK_RELAXED_FL");
+
+    if (relaxed && *relaxed == '1')
+        return shader_model >= 4
+                && info->features2.features.multiViewport
+                && info->features2.features.depthClamp
+                && info->features2.features.depthBiasClamp
+                && info->features2.features.shaderClipDistance
+                && info->draw_parameters_features.shaderDrawParameters
+                && info->vertex_divisor_features.vertexAttributeInstanceRateDivisor;
+
     return shader_model >= 4
             && info->features2.features.multiViewport
             && info->features2.features.geometryShader
