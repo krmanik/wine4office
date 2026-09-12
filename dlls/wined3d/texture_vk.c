@@ -377,7 +377,7 @@ static BOOL wined3d_texture_vk_download_plane(struct wined3d_context *context, V
     struct wined3d_bo_vk staging_bo;
     struct wined3d_bo_vk *dst_bo;
     VkBufferImageCopy region;
-    size_t dst_offset = 0;
+    size_t dst_offset = 0, dst_box_offset;
     size_t min_row_size;
     void *map_ptr;
 
@@ -426,6 +426,10 @@ static BOOL wined3d_texture_vk_download_plane(struct wined3d_context *context, V
         return FALSE;
     }
 
+    /* Byte offset of the destination box within the destination sub-resource. */
+    dst_box_offset = (size_t)dst_z * dst_slice_pitch + (size_t)dst_y * dst_row_pitch
+            + (size_t)(dst_x / plane_format->block_width) * plane_format->block_byte_count;
+
     if (!(vk_command_buffer = wined3d_context_vk_get_command_buffer(context_vk)))
     {
         ERR("Failed to get command buffer.\n");
@@ -473,7 +477,7 @@ static BOOL wined3d_texture_vk_download_plane(struct wined3d_context *context, V
         vk_barrier.size = sub_resource->size;
 
         bo_stage_flags = vk_pipeline_stage_mask_from_buffer_usage(dst_bo->usage);
-        dst_offset = (size_t)dst_bo_addr->addr;
+        dst_offset = (size_t)dst_bo_addr->addr + dst_box_offset;
 
         VK_CALL(vkCmdPipelineBarrier(vk_command_buffer, bo_stage_flags,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &vk_barrier, 0, NULL));
@@ -497,9 +501,9 @@ static BOOL wined3d_texture_vk_download_plane(struct wined3d_context *context, V
     region.imageSubresource.mipLevel = vk_range.baseMipLevel;
     region.imageSubresource.baseArrayLayer = vk_range.baseArrayLayer;
     region.imageSubresource.layerCount = 1;
-    region.imageOffset.x = 0;
-    region.imageOffset.y = 0;
-    region.imageOffset.z = 0;
+    region.imageOffset.x = src_box->left;
+    region.imageOffset.y = src_box->top;
+    region.imageOffset.z = src_box->front;
     region.imageExtent.width = src_width;
     region.imageExtent.height = src_height;
     region.imageExtent.depth = src_depth;
@@ -534,7 +538,8 @@ static BOOL wined3d_texture_vk_download_plane(struct wined3d_context *context, V
         }
 
         wined3d_format_copy_data(plane_format, map_ptr, src_row_pitch, src_slice_pitch,
-                dst_bo_addr->addr, dst_row_pitch, dst_slice_pitch, src_width, src_height, src_depth);
+                (BYTE *)dst_bo_addr->addr + dst_box_offset, dst_row_pitch, dst_slice_pitch,
+                src_width, src_height, src_depth);
 
         wined3d_context_unmap_bo_address(context, &staging_bo_addr, 0, NULL);
         wined3d_context_vk_destroy_bo(context_vk, &staging_bo);
@@ -567,6 +572,7 @@ static BOOL wined3d_texture_vk_download_data(struct wined3d_context *context,
 {
     unsigned int src_level, src_width, src_height, src_depth;
     VkImageAspectFlags aspect_mask;
+    bool boxed;
 
     TRACE("context %p, src_texture %p, src_sub_resource_idx %u, src_location %s, src_box %s, dst_bo_addr %s, "
             "dst_format %s, dst_x %u, dst_y %u, dst_z %u, dst_row_pitch %u, dst_slice_pitch %u.\n",
@@ -605,10 +611,13 @@ static BOOL wined3d_texture_vk_download_data(struct wined3d_context *context,
     src_width = wined3d_texture_get_level_width(src_texture, src_level);
     src_height = wined3d_texture_get_level_height(src_texture, src_level);
     src_depth = wined3d_texture_get_level_depth(src_texture, src_level);
-    if (src_box->left || src_box->top || src_box->right != src_width || src_box->bottom != src_height
-            || src_box->front || src_box->back != src_depth)
+    boxed = src_box->left || src_box->top || src_box->right != src_width || src_box->bottom != src_height
+            || src_box->front || src_box->back != src_depth;
+    if ((boxed || dst_x || dst_y || dst_z)
+            && (src_texture->resource.format_attrs & WINED3D_FORMAT_ATTR_COMPRESSED
+            || dst_format->attrs & WINED3D_FORMAT_ATTR_PLANAR))
     {
-        FIXME("Unhandled source box %s.\n", debug_box(src_box));
+        FIXME("Unhandled boxed download %s to (%u, %u, %u).\n", debug_box(src_box), dst_x, dst_y, dst_z);
         return FALSE;
     }
 
@@ -618,12 +627,6 @@ static BOOL wined3d_texture_vk_download_data(struct wined3d_context *context,
         FIXME("Unhandled format conversion (%s -> %s).\n",
                 debug_d3dformat(src_texture->resource.format->id),
                 debug_d3dformat(dst_format->id));
-        return FALSE;
-    }
-
-    if (dst_x || dst_y || dst_z)
-    {
-        FIXME("Unhandled destination (%u, %u, %u).\n", dst_x, dst_y, dst_z);
         return FALSE;
     }
 
