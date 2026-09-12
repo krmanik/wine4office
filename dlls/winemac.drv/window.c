@@ -1180,7 +1180,11 @@ BOOL macdrv_client_surface_acquire_metal_swapchain(struct macdrv_client_surface 
 
         if (NtUserGetAncestor(hwnd, GA_ROOT) != hwnd)
         {
-            FIXME("Cross-process child window Metal swapchains are not implemented\n");
+            DWORD pid = 0, tid = NtUserGetWindowThread(hwnd, &pid);
+            FIXME("Cross-process child window Metal swapchains are not implemented, hwnd %p owner %04x/%04x "
+                  "current %04x/%04x parent %p root %p style %#x\n", hwnd, (int)pid, (int)tid,
+                  (int)GetCurrentProcessId(), (int)GetCurrentThreadId(), NtUserGetAncestor(hwnd, GA_PARENT),
+                  NtUserGetAncestor(hwnd, GA_ROOT), (int)NtUserGetWindowLongW(hwnd, GWL_STYLE));
             return FALSE;
         }
 
