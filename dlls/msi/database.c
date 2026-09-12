@@ -147,7 +147,6 @@ UINT MSI_OpenDatabaseW(LPCWSTR szDBPath, LPCWSTR szPersist, MSIDATABASE **pdb)
     UINT mode;
     STATSTG stat;
     BOOL created = FALSE, patch = FALSE;
-    WCHAR path[MAX_PATH];
 
     TRACE("%s %s\n",debugstr_w(szDBPath),debugstr_w(szPersist) );
 
@@ -255,14 +254,23 @@ UINT MSI_OpenDatabaseW(LPCWSTR szDBPath, LPCWSTR szPersist, MSIDATABASE **pdb)
 
     if (!wcschr( save_path, '\\' ))
     {
-        GetCurrentDirectoryW( MAX_PATH, path );
-        lstrcatW( path, L"\\" );
-        lstrcatW( path, save_path );
+        /* The current directory and a relative name can together exceed MAX_PATH. */
+        DWORD cwd_len = GetCurrentDirectoryW( 0, NULL ), len = cwd_len + 1 + wcslen( save_path );
+
+        if (cwd_len && (db->path = malloc( len * sizeof(WCHAR) ))
+                && GetCurrentDirectoryW( cwd_len, db->path ) < cwd_len)
+        {
+            lstrcatW( db->path, L"\\" );
+            lstrcatW( db->path, save_path );
+        }
+        else
+        {
+            free( db->path );
+            db->path = wcsdup( save_path );
+        }
     }
     else
-        lstrcpyW( path, save_path );
-
-    db->path = wcsdup( path );
+        db->path = wcsdup( save_path );
     db->media_transform_offset = MSI_INITIAL_MEDIA_TRANSFORM_OFFSET;
     db->media_transform_disk_id = MSI_INITIAL_MEDIA_TRANSFORM_DISKID;
 
