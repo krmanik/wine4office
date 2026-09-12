@@ -146,9 +146,9 @@ void wined3d_swapchain_vk_cleanup(struct wined3d_swapchain_vk *swapchain_vk)
 
     wined3d_cs_destroy_object(cs, wined3d_swapchain_vk_destroy_object, swapchain_vk);
     wined3d_cs_finish(cs, WINED3D_CS_QUEUE_DEFAULT);
-    if (swapchain_vk->composition_source)
-        wined3d_texture_decref( swapchain_vk->composition_source );
-    swapchain_vk->composition_source = NULL;
+    free( swapchain_vk->composition_backup );
+    swapchain_vk->composition_backup = NULL;
+    swapchain_vk->composition_backup_size = 0;
     swapchain_vk->composition_image = VK_NULL_HANDLE;
     swapchain_vk->composition_command_buffer_id = 0;
 
@@ -1428,25 +1428,27 @@ static BOOL dcomp_inverse_vk( const struct wine_dcomp_visual_desc *desc,
     return isfinite( *out_x ) && isfinite( *out_y );
 }
 
-static BOOL wined3d_swapchain_vk_apply_composition(struct wined3d_swapchain *swapchain,
-        const struct wine_dcomp_visual_desc *desc, const RECT *src_rect,
-        struct wined3d_texture **source_backup)
+/* Called on the CS thread while presenting. The public texture creation and
+ * resource map entry points queue work to the CS and wait for it, so this uses
+ * the context-level location helpers instead. */
+static BOOL wined3d_swapchain_vk_apply_composition(struct wined3d_swapchain_vk *swapchain_vk,
+        struct wined3d_context_vk *context_vk, const struct wine_dcomp_visual_desc *desc,
+        const RECT *src_rect)
 {
-    struct wined3d_texture *back_buffer = swapchain->back_buffers[0];
-    struct wined3d_texture *source_texture = NULL, *output_texture = NULL;
-    struct wined3d_resource_desc staging_desc;
-    struct wined3d_map_desc source_map, output_map;
-    struct wined3d_box box;
+    struct wined3d_texture *back_buffer = swapchain_vk->s.back_buffers[0];
+    struct wined3d_texture_sub_resource *sub_resource = &back_buffer->sub_resources[0];
+    struct wined3d_context *context = &context_vk->c;
     float left, top, right, bottom, source_width, source_height, area, sx, sy, u, v;
     float corner_x[4], corner_y[4], min_x, min_y, max_x, max_y;
     UINT source_width_pixels, source_height_pixels, x, y;
-    unsigned int channel;
+    unsigned int channel, row_pitch, slice_pitch;
     BYTE *source_data, *output_data, *dst;
     UINT source_row_pitch, output_row_pitch;
-    BOOL linear, source_mapped = FALSE, output_mapped = FALSE;
-    HRESULT hr;
-    if (!source_backup) return FALSE;
-    *source_backup = NULL;
+    struct wined3d_bo_address data;
+    struct wined3d_range range;
+    BOOL linear;
+
+    if (swapchain_vk->composition_backup) return FALSE;
     if (back_buffer->resource.format->byte_count != 4
             || (back_buffer->resource.format->attrs & WINED3D_FORMAT_ATTR_BLOCKS))
     {
@@ -1462,40 +1464,25 @@ static BOOL wined3d_swapchain_vk_apply_composition(struct wined3d_swapchain *swa
             || src_rect->right <= src_rect->left || src_rect->bottom <= src_rect->top)
         return FALSE;
 
-    staging_desc.resource_type = WINED3D_RTYPE_TEXTURE_2D;
-    staging_desc.format = back_buffer->resource.format->id;
-    staging_desc.multisample_type = 0;
-    staging_desc.multisample_quality = 0;
-    staging_desc.usage = 0;
-    staging_desc.bind_flags = 0;
-    staging_desc.access = WINED3D_RESOURCE_ACCESS_CPU
-            | WINED3D_RESOURCE_ACCESS_MAP_R | WINED3D_RESOURCE_ACCESS_MAP_W;
-    staging_desc.width = source_width_pixels;
-    staging_desc.height = source_height_pixels;
-    staging_desc.depth = 1;
-    staging_desc.size = 0;
-    if (FAILED(hr = wined3d_texture_create( back_buffer->resource.device, &staging_desc, 1, 1, 0,
-            NULL, NULL, &wined3d_null_parent_ops, &source_texture )))
+    /* Keep the application's pixels in a CPU backup and compose into the
+     * back buffer's system memory copy; the caller reloads the draw binding. */
+    wined3d_texture_get_pitch( back_buffer, 0, &row_pitch, &slice_pitch );
+    if (!(source_data = malloc( sub_resource->size )))
         return FALSE;
-    if (FAILED(hr = wined3d_texture_create( back_buffer->resource.device, &staging_desc, 1, 1, 0,
-            NULL, NULL, &wined3d_null_parent_ops, &output_texture )))
-        goto failed;
-    wined3d_box_set( &box, 0, 0, source_width_pixels, source_height_pixels, 0, 1 );
-    if (!wined3d_texture_download_from_texture( source_texture, 0, 0, 0, 0,
-            back_buffer, 0, &box ))
-        goto failed;
-    if (FAILED(hr = wined3d_resource_map( &source_texture->resource, 0, &source_map,
-            NULL, WINED3D_MAP_READ )))
-        goto failed;
-    source_data = source_map.data;
-    source_row_pitch = source_map.row_pitch;
-    source_mapped = TRUE;
-    if (FAILED(hr = wined3d_resource_map( &output_texture->resource, 0, &output_map,
-            NULL, WINED3D_MAP_WRITE )))
-        goto failed;
-    output_mapped = TRUE;
-    output_data = output_map.data;
-    output_row_pitch = output_map.row_pitch;
+    if (!wined3d_texture_load_location( back_buffer, 0, context, WINED3D_LOCATION_SYSMEM ))
+    {
+        free( source_data );
+        return FALSE;
+    }
+    wined3d_texture_get_bo_address( back_buffer, 0, &data, WINED3D_LOCATION_SYSMEM );
+    if (!(output_data = wined3d_context_map_bo_address( context, &data, sub_resource->size,
+            WINED3D_MAP_READ | WINED3D_MAP_WRITE )))
+    {
+        free( source_data );
+        return FALSE;
+    }
+    memcpy( source_data, output_data, sub_resource->size );
+    source_row_pitch = output_row_pitch = row_pitch;
     for (y = 0; y < source_height_pixels; ++y)
         memset( output_data + y * output_row_pitch, 0, source_width_pixels * 4 );
 
@@ -1579,30 +1566,26 @@ static BOOL wined3d_swapchain_vk_apply_composition(struct wined3d_swapchain *swa
             }
         }
 output_done:
-    if (output_mapped) wined3d_resource_unmap( &output_texture->resource, 0 );
-    if (source_mapped) wined3d_resource_unmap( &source_texture->resource, 0 );
-    wined3d_box_set( &box, 0, 0, source_width_pixels, source_height_pixels, 0, 1 );
-    wined3d_texture_upload_from_texture( back_buffer, 0, 0, 0, 0, output_texture, 0, &box );
-    *source_backup = source_texture;
-    source_texture = NULL;
-    wined3d_texture_decref( output_texture );
+    range.offset = 0;
+    range.size = sub_resource->size;
+    wined3d_context_unmap_bo_address( context, &data, 1, &range );
+    wined3d_texture_validate_location( back_buffer, 0, WINED3D_LOCATION_SYSMEM );
+    wined3d_texture_invalidate_location( back_buffer, 0, ~WINED3D_LOCATION_SYSMEM );
+    swapchain_vk->composition_backup = source_data;
+    swapchain_vk->composition_backup_size = sub_resource->size;
     return TRUE;
-
-failed:
-    if (output_mapped) wined3d_resource_unmap( &output_texture->resource, 0 );
-    if (source_mapped) wined3d_resource_unmap( &source_texture->resource, 0 );
-    if (output_texture) wined3d_texture_decref( output_texture );
-    if (source_texture) wined3d_texture_decref( source_texture );
-    return FALSE;
 }
+
 static void wined3d_swapchain_vk_restore_composition(struct wined3d_swapchain_vk *swapchain_vk,
         struct wined3d_context_vk *context_vk)
 {
     struct wined3d_texture *back_buffer = NULL;
-    struct wined3d_box box;
+    struct wined3d_bo_address data;
+    struct wined3d_range range;
     unsigned int i;
+    BYTE *mem;
 
-    if (!swapchain_vk->composition_source) return;
+    if (!swapchain_vk->composition_backup) return;
     if (swapchain_vk->composition_command_buffer_id)
         wined3d_context_vk_wait_command_buffer( context_vk,
                 swapchain_vk->composition_command_buffer_id );
@@ -1615,15 +1598,24 @@ static void wined3d_swapchain_vk_restore_composition(struct wined3d_swapchain_vk
             break;
         }
     }
-    if (back_buffer)
+    if (back_buffer && back_buffer->sub_resources[0].size == swapchain_vk->composition_backup_size
+            && wined3d_texture_prepare_location( back_buffer, 0, &context_vk->c, WINED3D_LOCATION_SYSMEM ))
     {
-        wined3d_box_set( &box, 0, 0, wined3d_texture_get_level_width( back_buffer, 0 ),
-                wined3d_texture_get_level_height( back_buffer, 0 ), 0, 1 );
-        wined3d_texture_upload_from_texture( back_buffer, 0, 0, 0, 0,
-                swapchain_vk->composition_source, 0, &box );
+        wined3d_texture_get_bo_address( back_buffer, 0, &data, WINED3D_LOCATION_SYSMEM );
+        if ((mem = wined3d_context_map_bo_address( &context_vk->c, &data,
+                swapchain_vk->composition_backup_size, WINED3D_MAP_WRITE )))
+        {
+            memcpy( mem, swapchain_vk->composition_backup, swapchain_vk->composition_backup_size );
+            range.offset = 0;
+            range.size = swapchain_vk->composition_backup_size;
+            wined3d_context_unmap_bo_address( &context_vk->c, &data, 1, &range );
+            wined3d_texture_validate_location( back_buffer, 0, WINED3D_LOCATION_SYSMEM );
+            wined3d_texture_invalidate_location( back_buffer, 0, ~WINED3D_LOCATION_SYSMEM );
+        }
     }
-    wined3d_texture_decref( swapchain_vk->composition_source );
-    swapchain_vk->composition_source = NULL;
+    free( swapchain_vk->composition_backup );
+    swapchain_vk->composition_backup = NULL;
+    swapchain_vk->composition_backup_size = 0;
     swapchain_vk->composition_image = VK_NULL_HANDLE;
     swapchain_vk->composition_command_buffer_id = 0;
 }
@@ -1656,14 +1648,17 @@ static VkResult wined3d_swapchain_vk_blit(struct wined3d_swapchain_vk *swapchain
     wined3d_swapchain_vk_restore_composition( swapchain_vk, context_vk );
     if (swapchain_vk->s.composition_desc.flags & WINE_DCOMP_VISUAL_RENDERER_ACTIVE)
     {
-        if (!wined3d_swapchain_vk_apply_composition( &swapchain_vk->s,
-                &swapchain_vk->s.composition_desc, src_rect, &swapchain_vk->composition_source ))
+        if (!wined3d_swapchain_vk_apply_composition( swapchain_vk, context_vk,
+                &swapchain_vk->s.composition_desc, src_rect ))
         {
             ERR("Failed to apply Vulkan composition descriptor.\n");
             return VK_ERROR_FEATURE_NOT_PRESENT;
         }
     }
-    if (swapchain_vk->composition_source)
+    /* Restoring or composing may leave only the system memory copy current. */
+    wined3d_texture_load_location( &back_buffer_vk->t, 0, &context_vk->c,
+            back_buffer_vk->t.resource.draw_binding );
+    if (swapchain_vk->composition_backup)
         swapchain_vk->composition_image = back_buffer_vk->image.vk_image;
 
     if (FAILED(hr = wined3d_swapchain_vk_set_swap_interval(swapchain_vk, swap_interval)))
@@ -1764,7 +1759,7 @@ static VkResult wined3d_swapchain_vk_blit(struct wined3d_swapchain_vk *swapchain
     wined3d_context_vk_submit_command_buffer(context_vk,
             1, &swapchain_vk->vk_semaphores[present_idx].available, &wait_stage,
             1, &swapchain_vk->vk_semaphores[present_idx].presentable);
-    if (swapchain_vk->composition_source)
+    if (swapchain_vk->composition_backup)
         swapchain_vk->composition_command_buffer_id = context_vk->current_command_buffer.id;
 
     present_desc.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
