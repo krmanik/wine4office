@@ -1,5 +1,5 @@
 MODULE    = coremessaging.dll
-IMPORTS   = combase
+IMPORTS   = combase user32
 IMPORTLIB = coremessaging
 
 SOURCES = \

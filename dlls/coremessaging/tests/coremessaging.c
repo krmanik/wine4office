@@ -267,7 +267,6 @@ static void check_create_dispatcher_queue_controller_( unsigned int line, DWORD 
     if (hr == E_INVALIDARG) return;
 
     hr = IDispatcherQueueController_get_DispatcherQueue( dispatcher_queue_controller, &dispatcher_queue );
-    todo_wine
     ok_(__FILE__, line)( hr == S_OK, "got IDispatcherQueueController_get_DispatcherQueue hr %#lx.\n", hr );
     if (FAILED(hr)) goto done;
 
@@ -309,7 +308,7 @@ static void check_create_dispatcher_queue_controller_( unsigned int line, DWORD 
     /* shutdown waits for queued handlers */
     if (winetest_platform_is_wine) Sleep( 200 );
     ret = WaitForSingleObject( event_handler->event, 100 );
-    todo_wine ok_(__FILE__, line)( ret == WAIT_TIMEOUT, "Unexpected wait result %lu.\n", ret );
+    ok_(__FILE__, line)( ret == WAIT_TIMEOUT, "Unexpected wait result %lu.\n", ret );
     SetEvent( queue_handler->event );
 
     /* queue uses the message loop when dispatched on current thread */
@@ -438,18 +437,14 @@ static void test_DispatcherQueueController_Statics(void)
     ok( hr == S_OK, "got hr %#lx.\n", hr );
 
     hr = IDispatcherQueueControllerStatics_CreateOnDedicatedThread( dispatcher_queue_controller_statics, NULL );
-    todo_wine
     ok( hr == E_POINTER || hr == 0x80000005 /* win10 22h2 */, "got hr %#lx.\n", hr );
     hr = IDispatcherQueueControllerStatics_CreateOnDedicatedThread( dispatcher_queue_controller_statics, &dispatcher_queue_controller );
-    todo_wine
     ok( hr == S_OK, "got hr %#lx.\n", hr );
     if (FAILED(hr)) goto done;
 
     hr = IDispatcherQueueController_get_DispatcherQueue( dispatcher_queue_controller, NULL );
-    todo_wine
     ok( hr == E_POINTER || hr == 0x80000005 /* win10 22h2 */, "got hr %#lx.\n", hr );
     hr = IDispatcherQueueController_get_DispatcherQueue( dispatcher_queue_controller, &dispatcher_queue );
-    todo_wine
     ok( hr == S_OK, "got hr %#lx.\n", hr );
 
     check_interface( dispatcher_queue, &IID_IUnknown );
@@ -500,7 +495,7 @@ static void test_DispatcherQueueController_Statics(void)
     /* shutdown waits for queued handlers */
     if (winetest_platform_is_wine) Sleep( 200 );
     ret = WaitForSingleObject( event_handler->event, 100 );
-    todo_wine ok( ret == WAIT_TIMEOUT, "Unexpected wait result %lu.\n", ret );
+    ok( ret == WAIT_TIMEOUT, "Unexpected wait result %lu.\n", ret );
 
     SetEvent( queue_handler->event );
     ret = WaitForSingleObject( event_handler->event, 5000 );
@@ -536,6 +531,77 @@ done:
     ok( ref == 1, "got ref %ld.\n", ref );
 }
 
+static DWORD WINAPI get_for_current_thread_proc( void *arg )
+{
+    IDispatcherQueueStatics *dispatcher_queue_statics = arg;
+    IDispatcherQueue *dispatcher_queue = (void *)0xdeadbeef;
+    HRESULT hr;
+
+    hr = IDispatcherQueueStatics_GetForCurrentThread( dispatcher_queue_statics, &dispatcher_queue );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+    ok( !dispatcher_queue, "got dispatcher_queue %p.\n", dispatcher_queue );
+    return 0;
+}
+
+static void test_DispatcherQueue_Statics(void)
+{
+    static const WCHAR *dispatcher_queue_statics_name = L"Windows.System.DispatcherQueue";
+    struct DispatcherQueueOptions options = { sizeof( DispatcherQueueOptions ), DQTYPE_THREAD_CURRENT, DQTAT_COM_NONE };
+    IDispatcherQueueController *dispatcher_queue_controller;
+    IDispatcherQueueStatics *dispatcher_queue_statics;
+    IDispatcherQueue *dispatcher_queue, *current;
+    IActivationFactory *factory;
+    HSTRING str = NULL;
+    HANDLE thread;
+    HRESULT hr;
+
+    hr = WindowsCreateString( dispatcher_queue_statics_name, wcslen( dispatcher_queue_statics_name ), &str );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+    hr = RoGetActivationFactory( str, &IID_IActivationFactory, (void **)&factory );
+    WindowsDeleteString( str );
+    ok( hr == S_OK || broken(hr == REGDB_E_CLASSNOTREG), "got hr %#lx.\n", hr );
+    if (hr == REGDB_E_CLASSNOTREG)
+    {
+        win_skip( "%s runtimeclass not registered, skipping tests.\n", wine_dbgstr_w( dispatcher_queue_statics_name ) );
+        return;
+    }
+
+    check_interface( factory, &IID_IUnknown );
+    check_interface( factory, &IID_IInspectable );
+    check_interface( factory, &IID_IAgileObject );
+
+    hr = IActivationFactory_QueryInterface( factory, &IID_IDispatcherQueueStatics, (void **)&dispatcher_queue_statics );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+
+    hr = IDispatcherQueueStatics_GetForCurrentThread( dispatcher_queue_statics, NULL );
+    ok( hr == E_POINTER || hr == 0x80000005 /* win10 22h2 */, "got hr %#lx.\n", hr );
+    current = (void *)0xdeadbeef;
+    hr = IDispatcherQueueStatics_GetForCurrentThread( dispatcher_queue_statics, &current );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+    ok( !current, "got current %p.\n", current );
+
+    hr = CreateDispatcherQueueController( options, &dispatcher_queue_controller );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+    hr = IDispatcherQueueController_get_DispatcherQueue( dispatcher_queue_controller, &dispatcher_queue );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+
+    current = NULL;
+    hr = IDispatcherQueueStatics_GetForCurrentThread( dispatcher_queue_statics, &current );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+    ok( current == dispatcher_queue, "got current %p, expected %p.\n", current, dispatcher_queue );
+    if (current) IDispatcherQueue_Release( current );
+
+    /* the queue belongs to this thread only */
+    thread = CreateThread( NULL, 0, get_for_current_thread_proc, dispatcher_queue_statics, 0, NULL );
+    ok( !WaitForSingleObject( thread, 5000 ), "thread did not finish.\n" );
+    CloseHandle( thread );
+
+    IDispatcherQueue_Release( dispatcher_queue );
+    IDispatcherQueueController_Release( dispatcher_queue_controller );
+    IDispatcherQueueStatics_Release( dispatcher_queue_statics );
+    IActivationFactory_Release( factory );
+}
+
 START_TEST(coremessaging)
 {
     HRESULT hr;
@@ -545,6 +611,7 @@ START_TEST(coremessaging)
 
     test_CreateDispatcherQueueController();
     test_DispatcherQueueController_Statics();
+    test_DispatcherQueue_Statics();
 
     RoUninitialize();
 }
