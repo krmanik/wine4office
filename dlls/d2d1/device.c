@@ -5528,6 +5528,32 @@ static BOOL d2d_device_context_realize_effect_input(struct d2d_device_context *c
         ID2D1Image *image, D2D1_INTERPOLATION_MODE interpolation_mode,
         unsigned int depth, struct d2d_software_image *result);
 
+/* The software path renders only the affine part of a 3D transform, which
+ * covers the translations and scales Office's AirSpace compositor uses. */
+static BOOL d2d_effect_get_affine_transform(ID2D1Effect *effect, const CLSID *clsid,
+        D2D1_MATRIX_3X2_F *transform)
+{
+    D2D1_MATRIX_4X4_F matrix;
+    static BOOL once;
+
+    if (IsEqualGUID(clsid, &CLSID_D2D12DAffineTransform))
+        return SUCCEEDED(ID2D1Effect_GetValue(effect, D2D1_2DAFFINETRANSFORM_PROP_TRANSFORM_MATRIX,
+                D2D1_PROPERTY_TYPE_MATRIX_3X2, (BYTE *)transform, sizeof(*transform)));
+
+    if (FAILED(ID2D1Effect_GetValue(effect, D2D1_3DTRANSFORM_PROP_TRANSFORM_MATRIX,
+            D2D1_PROPERTY_TYPE_MATRIX_4X4, (BYTE *)&matrix, sizeof(matrix))))
+        return FALSE;
+    if ((matrix._14 != 0.0f || matrix._24 != 0.0f || matrix._34 != 0.0f || matrix._44 != 1.0f) && !once++)
+        FIXME("Ignoring the projective part of a 3D transform.\n");
+    transform->_11 = matrix._11;
+    transform->_12 = matrix._12;
+    transform->_21 = matrix._21;
+    transform->_22 = matrix._22;
+    transform->_31 = matrix._41;
+    transform->_32 = matrix._42;
+    return TRUE;
+}
+
 static BOOL d2d_device_context_realize_effect(struct d2d_device_context *context,
         ID2D1Effect *effect, D2D1_INTERPOLATION_MODE interpolation_mode,
         unsigned int depth, struct d2d_software_image *result)
@@ -5549,10 +5575,10 @@ static BOOL d2d_device_context_realize_effect(struct d2d_device_context *context
         return FALSE;
 
     input_count = ID2D1Effect_GetInputCount(effect);
-    if (IsEqualGUID(&clsid, &CLSID_D2D12DAffineTransform) && input_count)
+    if ((IsEqualGUID(&clsid, &CLSID_D2D12DAffineTransform)
+            || IsEqualGUID(&clsid, &CLSID_D2D13DTransform)) && input_count)
     {
-        if (FAILED(ID2D1Effect_GetValue(effect, D2D1_2DAFFINETRANSFORM_PROP_TRANSFORM_MATRIX,
-                D2D1_PROPERTY_TYPE_MATRIX_3X2, (BYTE *)&transform, sizeof(transform))))
+        if (!d2d_effect_get_affine_transform(effect, &clsid, &transform))
             return FALSE;
         ID2D1Effect_GetInput(effect, 0, &input_image);
         if (!input_image)

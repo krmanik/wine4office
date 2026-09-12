@@ -12509,6 +12509,7 @@ static void test_builtin_effect(BOOL d3d11)
     {
         {&CLSID_D2D12DAffineTransform,       1, 1, 1, 1},
         {&CLSID_D2D13DPerspectiveTransform,  1, 1, 1, 1},
+        {&CLSID_D2D13DTransform,             1, 1, 1, 1},
         {&CLSID_D2D1Composite,               1, 2, 1, 0xffffffff},
         {&CLSID_D2D1Crop,                    1, 1, 1, 1},
         {&CLSID_D2D1Shadow,                  1, 1, 1, 1},

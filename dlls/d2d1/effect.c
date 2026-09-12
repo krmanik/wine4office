@@ -1221,6 +1221,50 @@ static HRESULT __stdcall _3d_perspective_transform_factory(IUnknown **effect)
     return d2d_effect_create_impl(effect, &properties, sizeof(properties));
 }
 
+static const WCHAR _3d_transform_description[] =
+L"<?xml version='1.0'?>                                                   \
+  <Effect>                                                                \
+    <Property name='DisplayName' type='string' value='3D Transform'/>     \
+    <Property name='Author'      type='string' value='The Wine Project'/> \
+    <Property name='Category'    type='string' value='Stub'/>             \
+    <Property name='Description' type='string' value='3D Transform'/>     \
+    <Inputs>                                                              \
+      <Input name='Source'/>                                              \
+    </Inputs>                                                             \
+    <Property name='InterpolationMode' type='enum' />                     \
+    <Property name='BorderMode' type='enum' />                            \
+    <Property name='TransformMatrix' type='matrix4x4' />                  \
+  </Effect>";
+
+struct _3d_transform_properties
+{
+    D2D1_3DTRANSFORM_INTERPOLATION_MODE interpolation_mode;
+    D2D1_BORDER_MODE border_mode;
+    D2D1_MATRIX_4X4_F transform_matrix;
+};
+
+EFFECT_PROPERTY_RW(_3d_transform, interpolation_mode, ENUM)
+EFFECT_PROPERTY_RW(_3d_transform, border_mode, ENUM)
+EFFECT_PROPERTY_RW(_3d_transform, transform_matrix, MATRIX_4X4)
+
+static const D2D1_PROPERTY_BINDING _3d_transform_bindings[] =
+{
+    { L"InterpolationMode", BINDING_RW(_3d_transform, interpolation_mode) },
+    { L"BorderMode", BINDING_RW(_3d_transform, border_mode) },
+    { L"TransformMatrix", BINDING_RW(_3d_transform, transform_matrix) },
+};
+
+static HRESULT __stdcall _3d_transform_factory(IUnknown **effect)
+{
+    static const struct _3d_transform_properties properties =
+    {
+        .interpolation_mode = D2D1_3DTRANSFORM_INTERPOLATION_MODE_LINEAR,
+        .border_mode = D2D1_BORDER_MODE_SOFT,
+        .transform_matrix = { ._11 = 1.0f, ._22 = 1.0f, ._33 = 1.0f, ._44 = 1.0f },
+    };
+    return d2d_effect_create_impl(effect, &properties, sizeof(properties));
+}
+
 static const WCHAR composite_description[] =
 L"<?xml version='1.0'?>                                                   \
   <Effect>                                                                \
@@ -1828,6 +1872,7 @@ void d2d_effects_init_builtins(struct d2d_factory *factory)
 #define X2(name) name##_description, name##_factory, name##_bindings, ARRAY_SIZE(name##_bindings)
         { &CLSID_D2D12DAffineTransform, X2(_2d_affine_transform) },
         { &CLSID_D2D13DPerspectiveTransform, X2(_3d_perspective_transform) },
+        { &CLSID_D2D13DTransform, X2(_3d_transform) },
         { &CLSID_D2D1Composite, X2(composite) },
         { &CLSID_D2D1Crop, X2(crop) },
         { &CLSID_D2D1Shadow, X2(shadow) },
