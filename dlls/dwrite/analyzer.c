@@ -547,19 +547,41 @@ static HRESULT fallback_locale_add_mapping(struct fallback_locale *locale, size_
     return S_OK;
 }
 
-/* TODO: potentially needs improvement to consider partially matching locale names. */
+/* Chinese locale names usually carry a region (zh-CN, zh-TW) while fallback
+ * mappings are keyed by script (zh-Hans, zh-Hant). */
+static const WCHAR *fallback_locale_chinese_script(const WCHAR *locale_name)
+{
+    static const WCHAR *traditional[] = { L"zh-TW", L"zh-HK", L"zh-MO" };
+    unsigned int i;
+
+    if (wcsnicmp(locale_name, L"zh", 2) || (locale_name[2] && locale_name[2] != '-')) return NULL;
+    if (!wcsnicmp(locale_name, L"zh-Hant", 7)) return L"zh-Hant";
+    if (!wcsnicmp(locale_name, L"zh-Hans", 7)) return L"zh-Hans";
+    for (i = 0; i < ARRAY_SIZE(traditional); ++i)
+        if (!wcsicmp(locale_name, traditional[i])) return L"zh-Hant";
+    return L"zh-Hans";
+}
+
+/* Exact names are matched first. When looking up a locale for mapping (use_neutral),
+ * a Chinese script or a bare language name ("ja" for "ja-JP") also matches. */
 static struct fallback_locale * font_fallback_get_locale(const struct list *locales,
         const WCHAR *locale_name, bool use_neutral)
 {
-    struct fallback_locale *locale, *neutral = NULL;
+    struct fallback_locale *locale, *partial = NULL, *neutral = NULL;
+    const WCHAR *script = use_neutral ? fallback_locale_chinese_script(locale_name) : NULL;
+    size_t language_len = wcscspn(locale_name, L"-");
 
     LIST_FOR_EACH_ENTRY(locale, locales, struct fallback_locale, entry)
     {
         if (!wcsicmp(locale->name, locale_name)) return locale;
-        if (use_neutral && !*locale->name) neutral = locale;
+        if (!use_neutral) continue;
+        if (!*locale->name) neutral = locale;
+        else if (!partial && (script ? !wcsicmp(locale->name, script)
+                : wcslen(locale->name) == language_len && !wcsnicmp(locale->name, locale_name, language_len)))
+            partial = locale;
     }
 
-    return neutral;
+    return partial ? partial : neutral;
 }
 
 struct fallback_data

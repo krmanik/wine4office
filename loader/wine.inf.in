@@ -520,6 +520,27 @@ HKLM,%FontSubStr%,"Times New Roman CYR,204",,"Times New Roman,204"
 HKLM,%FontSubStr%,"Times New Roman Greek,161",,"Times New Roman,161"
 HKLM,%FontSubStr%,"Times New Roman TUR,162",,"Times New Roman,162"
 HKLM,System\CurrentControlSet\Hardware Profiles\Current\Software\Fonts,"LogPixels",0x10003,0x00000060
+; CJK families used by DirectWrite fallback and Office, for systems without
+; Noto CJK or Windows fonts (macOS). A replacement only applies while the
+; family itself is missing, and the first installed candidate wins.
+HKCU,Software\Wine\Fonts\Replacements,"Noto Sans CJK SC",0x00010000,"Microsoft YaHei","Heiti SC","Hiragino Sans GB W3","Songti SC"
+HKCU,Software\Wine\Fonts\Replacements,"Noto Sans CJK TC",0x00010000,"Microsoft JhengHei","Heiti TC","Songti TC"
+HKCU,Software\Wine\Fonts\Replacements,"Noto Sans CJK JP",0x00010000,"MS Gothic","Hiragino Sans W3","Hiragino Kaku Gothic ProN W3"
+HKCU,Software\Wine\Fonts\Replacements,"Noto Sans CJK KR",0x00010000,"Malgun Gothic","Apple SD Gothic Neo"
+HKCU,Software\Wine\Fonts\Replacements,"DengXian",0x00010000,"Microsoft YaHei","Heiti SC","Hiragino Sans GB W3","Songti SC"
+HKCU,Software\Wine\Fonts\Replacements,"DengXian Light",0x00010000,"Microsoft YaHei","Heiti SC","Hiragino Sans GB W3","Songti SC"
+HKCU,Software\Wine\Fonts\Replacements,"Microsoft YaHei",0x00010000,"Heiti SC","Hiragino Sans GB W3","Songti SC"
+HKCU,Software\Wine\Fonts\Replacements,"Microsoft YaHei UI",0x00010000,"Microsoft YaHei","Heiti SC","Hiragino Sans GB W3"
+HKCU,Software\Wine\Fonts\Replacements,"SimHei",0x00010000,"Heiti SC","Microsoft YaHei"
+HKCU,Software\Wine\Fonts\Replacements,"SimSun",0x00010000,"Songti SC","STSong","Heiti SC"
+HKCU,Software\Wine\Fonts\Replacements,"NSimSun",0x00010000,"SimSun","Songti SC","STSong"
+HKCU,Software\Wine\Fonts\Replacements,"Microsoft JhengHei",0x00010000,"Heiti TC","Songti TC"
+HKCU,Software\Wine\Fonts\Replacements,"PMingLiU",0x00010000,"Microsoft JhengHei","Songti TC","Heiti TC"
+HKCU,Software\Wine\Fonts\Replacements,"MingLiU",0x00010000,"Microsoft JhengHei","Songti TC","Heiti TC"
+HKCU,Software\Wine\Fonts\Replacements,"MS Gothic",0x00010000,"Hiragino Sans W3","Hiragino Kaku Gothic ProN W3"
+HKCU,Software\Wine\Fonts\Replacements,"Yu Gothic",0x00010000,"MS Gothic","Hiragino Sans W3","Hiragino Kaku Gothic ProN W3"
+HKCU,Software\Wine\Fonts\Replacements,"Meiryo",0x00010000,"MS Gothic","Hiragino Sans W3","Hiragino Kaku Gothic ProN W3"
+HKCU,Software\Wine\Fonts\Replacements,"Malgun Gothic",0x00010000,"Apple SD Gothic Neo"
 
 [MCI]
 HKLM,%Mci32Str%,"AVIVideo",,"mciavi32.dll"
