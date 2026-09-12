@@ -1339,6 +1339,45 @@ static HRESULT __stdcall crop_factory(IUnknown **effect)
     return d2d_effect_create_impl(effect, &properties, sizeof(properties));
 }
 
+static const WCHAR atlas_description[] =
+L"<?xml version='1.0'?>                                                   \
+  <Effect>                                                                \
+    <Property name='DisplayName' type='string' value='Atlas'/>            \
+    <Property name='Author'      type='string' value='The Wine Project'/> \
+    <Property name='Category'    type='string' value='Stub'/>             \
+    <Property name='Description' type='string' value='Atlas'/>            \
+    <Inputs >                                                             \
+      <Input name='Source'/>                                              \
+    </Inputs>                                                             \
+    <Property name='InputRect' type='vector4' />                          \
+    <Property name='InputPaddingRect' type='vector4' />                   \
+  </Effect>";
+
+struct atlas_properties
+{
+    D2D1_VECTOR_4F input_rect;
+    D2D1_VECTOR_4F input_padding_rect;
+};
+
+EFFECT_PROPERTY_RW(atlas, input_rect, VECTOR4)
+EFFECT_PROPERTY_RW(atlas, input_padding_rect, VECTOR4)
+
+static const D2D1_PROPERTY_BINDING atlas_bindings[] =
+{
+    { L"InputRect", BINDING_RW(atlas, input_rect) },
+    { L"InputPaddingRect", BINDING_RW(atlas, input_padding_rect) },
+};
+
+static HRESULT __stdcall atlas_factory(IUnknown **effect)
+{
+    static const struct atlas_properties properties =
+    {
+        .input_rect = { -INFINITY, -INFINITY, INFINITY, INFINITY },
+        .input_padding_rect = { -INFINITY, -INFINITY, INFINITY, INFINITY },
+    };
+    return d2d_effect_create_impl(effect, &properties, sizeof(properties));
+}
+
 static const WCHAR shadow_description[] =
 L"<?xml version='1.0'?>                                                   \
   <Effect>                                                                \
@@ -1873,6 +1912,7 @@ void d2d_effects_init_builtins(struct d2d_factory *factory)
         { &CLSID_D2D12DAffineTransform, X2(_2d_affine_transform) },
         { &CLSID_D2D13DPerspectiveTransform, X2(_3d_perspective_transform) },
         { &CLSID_D2D13DTransform, X2(_3d_transform) },
+        { &CLSID_D2D1Atlas, X2(atlas) },
         { &CLSID_D2D1Composite, X2(composite) },
         { &CLSID_D2D1Crop, X2(crop) },
         { &CLSID_D2D1Shadow, X2(shadow) },

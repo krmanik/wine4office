@@ -5528,6 +5528,47 @@ static BOOL d2d_device_context_realize_effect_input(struct d2d_device_context *c
         ID2D1Image *image, D2D1_INTERPOLATION_MODE interpolation_mode,
         unsigned int depth, struct d2d_software_image *result);
 
+/* Make everything outside "rect" (in input space, mapped through the current
+ * transform) transparent, keeping the image in the same coordinate space. */
+static void d2d_software_image_clip(struct d2d_software_image *image, const D2D1_VECTOR_4F *rect,
+        const D2D1_MATRIX_3X2_F *transform)
+{
+    float left = INFINITY, top = INFINITY, right = -INFINITY, bottom = -INFINITY;
+    int x0, y0, x1, y1, x, y;
+    D2D1_POINT_2F point;
+    unsigned int i;
+
+    if (isinf(rect->x) || isinf(rect->y) || isinf(rect->z) || isinf(rect->w))
+        return;
+    for (i = 0; i < 4; ++i)
+    {
+        d2d_point_transform(&point, transform, i & 1 ? rect->z : rect->x, i & 2 ? rect->w : rect->y);
+        left = min(left, point.x);
+        top = min(top, point.y);
+        right = max(right, point.x);
+        bottom = max(bottom, point.y);
+    }
+    x0 = max(0, (int)floorf(left));
+    y0 = max(0, (int)floorf(top));
+    x1 = min((int)image->width, (int)ceilf(right));
+    y1 = min((int)image->height, (int)ceilf(bottom));
+
+    for (y = 0; y < (int)image->height; ++y)
+    {
+        BYTE *row = image->pixels + y * image->stride;
+
+        if (y < y0 || y >= y1 || x0 >= x1)
+        {
+            memset(row, 0, image->width * 4);
+            continue;
+        }
+        for (x = 0; x < x0; ++x)
+            memset(row + x * 4, 0, 4);
+        for (x = x1; x < (int)image->width; ++x)
+            memset(row + x * 4, 0, 4);
+    }
+}
+
 /* The software path renders only the affine part of a 3D transform, which
  * covers the translations and scales Office's AirSpace compositor uses. */
 static BOOL d2d_effect_get_affine_transform(ID2D1Effect *effect, const CLSID *clsid,
@@ -5591,6 +5632,24 @@ static BOOL d2d_device_context_realize_effect(struct d2d_device_context *context
         context->drawing_state.transform = previous_transform;
         ID2D1Image_Release(input_image);
         return SUCCEEDED(hr);
+    }
+
+    if (IsEqualGUID(&clsid, &CLSID_D2D1Atlas) && input_count)
+    {
+        D2D_VECTOR_4F input_rect = {-INFINITY, -INFINITY, INFINITY, INFINITY};
+
+        ID2D1Effect_GetValue(effect, D2D1_ATLAS_PROP_INPUT_RECT,
+                D2D1_PROPERTY_TYPE_VECTOR4, (BYTE *)&input_rect, sizeof(input_rect));
+        ID2D1Effect_GetInput(effect, 0, &input_image);
+        if (!input_image)
+            return FALSE;
+        hr = d2d_device_context_realize_effect_input(context, input_image,
+                interpolation_mode, depth + 1, result) ? S_OK : E_FAIL;
+        ID2D1Image_Release(input_image);
+        if (FAILED(hr))
+            return FALSE;
+        d2d_software_image_clip(result, &input_rect, &context->drawing_state.transform);
+        return TRUE;
     }
 
     if ((IsEqualGUID(&clsid, &CLSID_D2D1GaussianBlur)
