@@ -71,6 +71,15 @@ failed secure content, or broken desktop integration.
 
 ---
 
+## macOS (Experimental) 🍎
+
+Word starts and renders on Apple Silicon Macs, running as x86_64 under
+Rosetta 2 with Vulkan on MoltenVK. There's no Manager app for macOS yet, so
+you build and start it from the Terminal. See **[MACOS.md](MACOS.md)** for
+the build, Office install, and launch steps.
+
+---
+
 ## Support this project ☕
 
 Wine4Office is a solo, spare-time experiment involving a lot of AI tokens,
