@@ -1,0 +1,136 @@
+name: Build Wine4Office for macOS
+
+# Builds the prebuilt macOS package (tools/macos/build.sh) and publishes it as
+# a GitHub prerelease, where tools/macos/install.sh finds it. Push a tag named
+# wine4office-macos-<version>, or run the workflow by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the package as a GitHub prerelease"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "wine4office-macos-*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wine4office-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Apple Silicon; Wine4Office builds as x86_64 under Rosetta 2, as it runs on users' Macs.
+    runs-on: macos-15
+    timeout-minutes: 360
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - name: Check out Wine4Office
+        uses: actions/checkout@v4
+
+      - name: Select version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ $GITHUB_REF == refs/tags/wine4office-macos-* ]]; then
+            tag=$GITHUB_REF_NAME
+          else
+            tag=wine4office-macos-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}
+          fi
+          [[ $tag =~ ^wine4office-macos-[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$ ]] || {
+            echo "Unsupported tag: $tag" >&2
+            exit 1
+          }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#wine4office-macos-}" >> "$GITHUB_OUTPUT"
+          echo "deps_id=$(tools/macos/build.sh deps-id)" >> "$GITHUB_OUTPUT"
+          echo "W4O_WORK=$RUNNER_TEMP/w4o" >> "$GITHUB_ENV"
+          echo "W4O_VERSION=${tag#wine4office-macos-}" >> "$GITHUB_ENV"
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          brew install bison mingw-w64
+          command -v cmake >/dev/null || brew install cmake
+          command -v pkg-config >/dev/null || brew install pkgconf
+          command -v xz >/dev/null || brew install xz
+          sw_vers
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+          df -h "$RUNNER_TEMP"
+
+      - name: Restore x86_64 libraries
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/w4o/deps
+          key: wine4office-macos-deps-${{ steps.version.outputs.deps_id }}
+
+      - name: Build x86_64 libraries
+        run: tools/macos/build.sh deps
+
+      - name: Build Wine4Office
+        run: tools/macos/build.sh wine
+
+      - name: Package
+        run: tools/macos/build.sh package
+
+      - name: Create a Wine prefix with the package
+        # The runner's desktop session has been enough so far; don't block the release on it.
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          "$W4O_WORK/stage/Wine4Office/bin/wine4office" --prefix "$RUNNER_TEMP/smoke-prefix" setup --no-office
+          "$W4O_WORK/stage/Wine4Office/bin/wine4office" --prefix "$RUNNER_TEMP/smoke-prefix" status || true
+
+      - name: Upload package CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine4office-macos-${{ steps.version.outputs.version }}
+          path: |
+            ${{ runner.temp }}/w4o/out/wine4office-macos-x86_64.tar.xz
+            ${{ runner.temp }}/w4o/out/wine4office-macos-x86_64.tar.xz.sha256
+            ${{ runner.temp }}/w4o/out/install.sh
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Publish GitHub prerelease
+        if: startsWith(github.ref, 'refs/tags/wine4office-macos-') || inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          out=$W4O_WORK/out
+          sha=$(cut -d' ' -f1 "$out/wine4office-macos-x86_64.tar.xz.sha256")
+          installer="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/install.sh"
+          {
+            printf 'Prebuilt Wine4Office for macOS (experimental), built from %s.\n\n' "$GITHUB_SHA"
+            printf 'Install or update it, then Microsoft Office, from the Terminal:\n\n'
+            printf '```sh\nbash -c "$(curl -fsSL %s)"\n```\n\n' "$installer"
+            printf 'The installer asks which Office edition and language to install. '
+            printf 'See [MACOS.md](https://github.com/%s/blob/%s/MACOS.md) for details and known issues.\n\n' \
+              "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            printf 'SHA-256 of `wine4office-macos-x86_64.tar.xz`: `%s`\n' "$sha"
+          } > "$RUNNER_TEMP/notes.md"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Keep "latest" for the Linux releases; the macOS installer looks up its own.
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Wine4Office for macOS $VERSION" --notes-file "$RUNNER_TEMP/notes.md" \
+              --prerelease --latest=false
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$out/wine4office-macos-x86_64.tar.xz" \
+            "$out/wine4office-macos-x86_64.tar.xz.sha256" \
+            "$out/install.sh"
